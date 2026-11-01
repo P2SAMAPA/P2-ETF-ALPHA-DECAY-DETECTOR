@@ -13,6 +13,28 @@ change-detection* problem whose speed is limited by information, not cleverness.
 This repo builds the detector, calibrates every threshold by simulation to a stated
 false-alarm rate, and reports honestly what it can and cannot see.
 
+## How to read it (start here)
+
+This engine does **not** pick ETFs. It is a *gatekeeper*: it decides which signals have earned the
+right to be traded at all, and how much to trust the picks your other engines make. Open the
+**Action board** tab first.
+
+1. **Research signals — does any qualify to trade today?** A signal qualifies only if *all* hold:
+   it showed statistically real skill in its 3-year reference; it has raised no decay alarm; its
+   long/short book **paid after costs** both since the reference ended and over the last year; and
+   that return is **not just market exposure** (alpha t ≥ 1). When one qualifies, the board shows the
+   ETFs it would hold (long, short, top-3) and the size to use (normal or half). When none does — most
+   days — it says so and gives the reason for each signal that ever showed skill. Ranking ETFs
+   correctly is not enough: a signal can keep a positive rank correlation and still lose to trading costs.
+2. **Your other engines** — their *latest picks, unchanged*, next to how many scored periods back them.
+   The detector does not alter those picks; it measures how they have actually done (picks minus the
+   equal-weight universe, after costs). Until an engine has years of history it is neither trusted nor
+   doubted, and the board says "too early" rather than guessing.
+
+**Engine repository names are guesses.** `config.EXTERNAL_ENGINES` lists dataset names and file
+prefixes I inferred; an engine reported as "unavailable" or "0 matching files" may simply have a
+different name. Correct them there.
+
 ## The three questions
 
 1. **Is the signal still generating useful predictions?** Rolling rank IC with its
@@ -178,8 +200,8 @@ validation.py       decay scenarios and the economics of gating; power by annual
 trainer.py          per-universe monitors, gating backtest, engine ledger, validation, JSON
 push_results.py     HfApi.upload_file to the results dataset
 us_calendar.py       trading-day helpers
-streamlit_app.py     Signal health / Does the control layer help? / Engine picks / What the
-                   detector can see
+streamlit_app.py     Action board / Signal health / Does the control layer help? / Engine picks /
+                   What the detector can see
 .github/workflows/daily_run.yml   weekday cron after the US close (GitHub Actions)
 ```
 

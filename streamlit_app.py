@@ -169,6 +169,76 @@ def render_evidence(m):
                    "signal — but with only tens of periods per cell this is evidence, not a verdict.")
 
 
+def render_action_board(data):
+    st.markdown('<div class="banner" style="--accent: #0f766e;"><b>How to read this engine.</b> It is a gatekeeper, not a stock '
+                'picker: it never says "buy X". It decides which signals have earned the right to be traded at all, and how much to trust '
+                'the picks your other engines make. Most days the right answer is "none qualify" — that is the engine doing its job.</div>',
+                unsafe_allow_html=True)
+    unis = data.get("universes", {})
+    n_trade = sum(u["summary"].get("n_tradeable", 0) for u in unis.values())
+    n_mon = sum(u["summary"]["n_monitors"] for u in unis.values())
+    n_val = sum(u["summary"]["n_validated"] for u in unis.values())
+    st.markdown("###### 1. Research signals: does any qualify to trade today?")
+    cols = st.columns(3)
+    for c, (lab, val) in zip(cols, [("Signals monitored", str(n_mon)), ("Ever showed skill", str(n_val)), ("Qualify to trade today", str(n_trade))]):
+        with c:
+            st.markdown(kpi(lab, val), unsafe_allow_html=True)
+    if n_trade == 0:
+        st.warning("No research signal qualifies today. To qualify a signal must (1) have shown statistically real skill in its "
+                   "3-year reference, (2) have raised no decay alarm, (3) have paid after costs both since the reference and over the last "
+                   "year, and (4) not be just market exposure. Ranking ETFs correctly is not enough: a signal can keep a positive rank "
+                   "correlation and still lose to trading costs.")
+    for uni, u in unis.items():
+        rows, info = [], []
+        for m in u["monitors"]:
+            a = m.get("action")
+            if not a or not m.get("validated"):
+                continue
+            rows.append({"Signal": m["signal"], "Horizon (d)": m["horizon"], "Status": m["status"], "Call": a["verdict"],
+                         "Exposure": a["exposure"], "Why": a["reason"]})
+            info.append((m, a))
+        n_unv = sum(1 for m in u["monitors"] if m.get("action") and not m.get("validated"))
+        st.markdown('<div class="universe-heading">' + uni.replace("_", " ").title() + '</div>', unsafe_allow_html=True)
+        st.caption(str(n_unv) + " of " + str(u["summary"]["n_monitors"]) + " monitors never showed skill in their reference (Unvalidated) and are not traded.")
+        if rows:
+            st.dataframe(pd.DataFrame(rows).style.format({"Exposure": "{:.1f}"}), use_container_width=True, hide_index=True)
+            for m, a in info:
+                if a["verdict"].startswith("Trade") and a.get("book"):
+                    b = a["book"]
+                    st.success(m["signal"] + " (" + str(m["horizon"]) + "d), " + a["verdict"] + ", as of " + str(a.get("as_of")) + ": long "
+                               + ", ".join(b["long"]) + " | short " + ", ".join(b["short"]) + " | top-3 " + ", ".join(b["top3"]))
+            with st.expander("What the signals that ever showed skill would hold today (information only, NOT a recommendation unless a green box says Trade)"):
+                for m, a in info:
+                    b = a.get("book")
+                    if b:
+                        st.write("**" + m["signal"] + ", " + str(m["horizon"]) + "d** (" + a["verdict"] + "): long " + ", ".join(b["long"])
+                                 + " | short " + ", ".join(b["short"]) + " | top-3 " + ", ".join(b["top3"]))
+        else:
+            st.info("No signal in this universe ever showed demonstrated skill.")
+    st.markdown("###### 2. Your other engines: their latest picks, and how much evidence backs them")
+    eng = data.get("engines", {})
+    rows = []
+    for name, r in eng.items():
+        latest = r.get("latest", {})
+        if not latest:
+            rows.append({"Engine": name, "Universe": "-", "As of": "-", "Latest picks": "-", "Horizon (d)": None, "Scored periods": 0,
+                         "Evidence": "Not scoreable: " + str(r.get("status")) + " (" + str(r.get("n_files", 0)) + " matching files)"})
+        for uni, lt in latest.items():
+            n = max([sr["n_periods"] for k, sr in r.get("series", {}).items() if k.startswith(uni + "|")] or [0])
+            ev = ("Too early: " + str(n) + " scored period(s); a verdict needs about three years" if n < 60
+                  else "Early: " + str(n) + " periods" if n < 150 else "Monitorable: " + str(n) + " periods")
+            rows.append({"Engine": name, "Universe": uni, "As of": lt["date"], "Latest picks": ", ".join(lt["tickers"]),
+                         "Horizon (d)": lt["horizon"], "Scored periods": n, "Evidence": ev})
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption("These picks are each engine's own, unchanged: this engine does not pick for them, it measures how they have actually done "
+                   "(picks minus the equal-weight universe, after costs). Until an engine has years of history it is neither trusted nor doubted. "
+                   "Repository names and file prefixes in config.EXTERNAL_ENGINES were guesses; an engine shown as not scoreable may simply "
+                   "have a different name.")
+    else:
+        st.info("No engines are configured.")
+
+
 def main():
     if "cache_bust" not in st.session_state:
         st.session_state.cache_bust = 0
@@ -198,7 +268,10 @@ def main():
         st.caption("📡 " + notes[0])
     stt = data.get("settings", {})
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🩺 Signal health", "🎛️ Does the control layer help?", "📒 Engine picks", "🧪 What the detector can see"])
+    tab0, tab1, tab2, tab3, tab4 = st.tabs(["🧭 Action board", "🩺 Signal health", "🎛️ Does the control layer help?", "📒 Engine picks", "🧪 What the detector can see"])
+
+    with tab0:
+        render_action_board(data)
 
     with tab1:
         st.markdown('<div class="note">Each row is one signal at one horizon on non-overlapping periods. The first '

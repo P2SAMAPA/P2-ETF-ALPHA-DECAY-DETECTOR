@@ -73,6 +73,50 @@ def perf(net: np.ndarray, expo: np.ndarray, ppy: float) -> Dict:
             "max_drawdown": dm.max_drawdown(net), "avg_exposure": float(np.mean(expo))}
 
 
+def today_book(scores_row: np.ndarray, tickers: List[str]) -> Optional[Dict]:
+    """What the signal would hold today: top-3, and the long / short quintiles of the rank-weighted book."""
+    if not np.all(np.isfinite(scores_row)):
+        return None
+    order = np.argsort(-scores_row)
+    k = int(max(1, round(0.2 * len(tickers))))
+    return {"top3": [tickers[i] for i in order[:config.TOP_N]], "long": [tickers[i] for i in order[:k]],
+            "short": [tickers[i] for i in order[::-1][:k]]}
+
+
+def action_for(m: Dict) -> Dict:
+    """
+    A plain-language call for one monitor. A signal qualifies only if ALL hold: it showed skill in the reference,
+    it has not raised a decay alarm, its long/short book paid after costs both over the whole monitoring period
+    and in the last year, and that return is not just market exposure (alpha t >= 1). Ranking ETFs correctly is
+    not enough — a signal can keep a positive IC and still lose to costs.
+    """
+    if not m.get("validated"):
+        return {"verdict": "Do not trade", "exposure": 0.0,
+                "reason": "No demonstrated skill in the %d-year reference (IC t = %+.2f, need >= %.2f)." % (
+                    int(config.REFERENCE_YEARS), m["reference"]["t"], config.VALIDATION_T)}
+    if m["status"] == "Suspended":
+        return {"verdict": "Do not trade", "exposure": 0.0,
+                "reason": "Decay alarm (first %s, latest %s); reinstatement needs two years of statistically real recovery." % (
+                    m["detector"].get("first_alarm"), m["detector"].get("last_alarm"))}
+    fails = []
+    net_recent = m["ls_net_pct_per_year"]["recent"]
+    net_since = m["gating"]["ungated"].get("mean_pct_per_year") if m.get("gating") and m["gating"].get("ungated") else None
+    at = (m.get("ls_alpha_recent") or {}).get("alpha_t")
+    if net_recent <= 0:
+        fails.append("the long/short book lost %.1f%%/yr after costs over the last year" % -net_recent)
+    if net_since is not None and net_since <= 0:
+        fails.append("it earned %+.1f%%/yr after costs since the reference ended" % net_since)
+    if at is None or at < 1.0:
+        fails.append("the recent return is mostly market exposure (alpha t = %s)" % ("n/a" if at is None else "%+.2f" % at))
+    note = " Underpowered: a total loss would be caught only %.0f%% of the time." % (100 * m["power_total_loss"]["p_detect"]) if m.get("underpowered") else ""
+    if fails:
+        return {"verdict": "Do not trade", "exposure": 0.0,
+                "reason": "It still ranks ETFs, but " + "; ".join(fails) + "." + note}
+    exp = config.EXPOSURE[m["status"]]
+    return {"verdict": "Trade, normal size" if m["status"] == "Active" else "Trade, reduced size", "exposure": exp,
+            "reason": "Validated, no decay alarm, pays after costs, not just market exposure." + note}
+
+
 def evaluate_monitor(m: Dict, H: int, N: int, regimes: Dict[str, np.ndarray], dates: List[str]) -> Dict:
     ppy = config.PERIODS_PER_YEAR[H]
     R, L = int(config.REFERENCE_YEARS * ppy), int(config.FA_YEARS * ppy)
@@ -186,6 +230,10 @@ def analyze_universe(name: str, tickers: List[str], prices_df: pd.DataFrame) -> 
             regimes = dm.regime_labels(returns, m["rows"])
             ev = evaluate_monitor(m, H, N, regimes, dates)
             ev.update({"signal": sname, "description": desc, "universe": name, "n_etfs": N})
+            if ev["status"] != "Insufficient history":
+                ev["action"] = action_for(ev)
+                ev["action"]["as_of"] = dates[-1]
+                ev["action"]["book"] = today_book(scores[-1], available)
             monitors.append(ev)
             counts[ev["status"]] = counts.get(ev["status"], 0) + 1
         logger.info(f"  [{name}] {sname}: done")
@@ -195,6 +243,7 @@ def analyze_universe(name: str, tickers: List[str], prices_df: pd.DataFrame) -> 
     summary = {"n_monitors": len(monitors), "status_counts": counts,
                "n_validated": int(sum(1 for mo in monitors if mo.get("validated"))),
                "n_underpowered": int(sum(1 for mo in monitors if mo.get("underpowered"))),
+               "n_tradeable": int(sum(1 for mo in monitors if (mo.get("action") or {}).get("verdict", "").startswith("Trade"))),
                "gating_mean_diff_pct_per_year": float(np.mean(diffs)) if diffs else None,
                "gating_share_better": float(np.mean([d > 0 for d in diffs])) if diffs else None}
     return {"monitors": monitors, "summary": summary, "n_etfs": N, "n_days": len(dates), "last_date": dates[-1], "first_date": dates[0]}

@@ -126,7 +126,12 @@ def run_ledger(prices: pd.DataFrame, token: Optional[str]) -> Dict:
         for d in docs:
             entries.extend(parse_picks(d, config.UNIVERSES))
         series = realized_series(entries, prices)
-        report[eng["name"]] = {"status": "ok" if series else "no scoreable picks", "n_files": len(docs),
+        latest = {}
+        for e in entries:
+            cur = latest.get(e["universe"])
+            if cur is None or e["date"] > cur["date"]:
+                latest[e["universe"]] = {"date": e["date"], "tickers": e["tickers"], "horizon": e["horizon"]}
+        report[eng["name"]] = {"status": "ok" if series else "no scoreable picks", "n_files": len(docs), "latest": latest,
                                "series": {"%s|%d" % (k[0], k[1]): {**summarize_series(v["rows"]),
                                           "recent": [{"date": r["date"], "net": r["net"]} for r in v["rows"][-5:]]}
                                           for k, v in series.items()}}
